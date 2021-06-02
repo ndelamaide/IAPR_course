@@ -103,6 +103,22 @@ def rank_morpho(rank):
 
 #--------------- CARD EXTRACTION ------------------------------
 
+def rotate_cards(cards):
+    ''' Rotate the cards of each player so they are in the right orientation
+    Returns : Rotated card images
+    '''
+    
+    # 0: Player1, 1: Player2 etc...
+    # We have to use empty arrays instead of None because images are arrays
+    cards_rotated = {0: np.array([]), 1: np.array([]), 2: np.array([]), 3: np.array([])}
+    rotations = [0, 90, 180, -90]
+
+    for i in range(4):
+        if cards[i].size != 0:
+            cards_rotated[i] = imutils.rotate_bound(cards[i], rotations[i])
+
+    return cards_rotated
+
 def find_bbox(image, threshold=25000, plot=True):
     ''' Finds the bboxes of the objects (here the cards and dealer token)
     Returns the number of bboxes 
@@ -353,19 +369,20 @@ def find_dealer(distances):
 #--------------- RANK + SUITE EXTRACTION ------------------------------
 
 
-def extraction(cards):
+def extraction(cards, bplot=False):
     ''' From the image of each card extracts the rank and the suite
+    If bplot = True plots the bbox found on the card
     Returns : The extracted suites and ranks of the cards as dictionaries
     '''
     
-     # 0: Player1, 1: Player2 etc...
+    # 0: Player1, 1: Player2 etc...
     # Each image has two images of its suit. We store both as list [suit1, suit2]
     extracted_suites = {0: None, 1: None, 2: None, 3: None}
     size_suite = (300, 300)
     
     # We have to use empty arrays instead of None because we directly store the images of the digits
     extracted_ranks = {0: np.array([]), 1: np.array([]), 2: np.array([]), 3: np.array([])}
-    size_rank = (300, 300) # Eventually needs to be same size as MNIST images
+    size_rank = (28, 28) # Same size as MNIST images
     
     for i in range(4):
         if cards[i].size!=0:
@@ -374,7 +391,7 @@ def extraction(cards):
             card = card_morpho(cards[i])
             
             # Find bbox of objects on card
-            num, boxes = find_bbox(card, 2000, True)
+            num, boxes = find_bbox(card, 2000, bplot)
             
             # Get suits + digit bboxes
             rank, suites = get_suit_rank(boxes)
@@ -384,13 +401,25 @@ def extraction(cards):
             # Second suit is upside down need to flip it
             rotations = [0, 180, 0, 0 , 0] # Added exta 0 in case len suites > 2
             
+            # Get shape of card
+            height, width = card.shape
+            
             # Get image of suits
             for j in range(len(suites)):
     
                 dx1, dy1, dx2, dy2 = suites[j][0]
+        
+                # Check that we don't select out of bounds of the image
+                incr = 5
+                if (dx1-incr > 0) & (dx2 + incr < height) & (dy1-incr > 0) & (dy2+incr < width):
+                    dx1 -= incr
+                    dx2 += incr
+                    dy1 -= incr
+                    dy2 += incr
                 
+                ## Check not out of bounds
                 # Mathematical morphology
-                im_suite = suite_morpho(card[dx1-3:dx2+3, dy1-3:dy2+3])
+                im_suite = suite_morpho(card[dx1:dx2, dy1:dy2])
                 im_suite = resize(im_suite, size_suite)
                 
                 im_suites.append(imutils.rotate_bound(np.float32(im_suite), rotations[j]))
@@ -401,9 +430,17 @@ def extraction(cards):
             # Get image of rank
             dx1, dy1, dx2, dy2 = rank[0]
             
+            # Check that we don't select out of bounds of the image
+            incr = 60
+            if (dx1-incr > 0) & (dx2 + incr < height) & (dy1-incr > 0) & (dy2+incr < width):
+                dx1 -= incr
+                dx2 += incr
+                dy1 -= incr
+                dy2 += incr
+            
             # Mathematical morphology
-            im_rank = rank_morpho(card[dx1-20:dx2+20, dy1-20:dy2+20])
-            im_rank = resize(im_rank, size_suite)
+            im_rank = rank_morpho(card[dx1:dx2, dy1:dy2])
+            im_rank = resize(im_rank, size_rank)
             
             extracted_ranks[i] = im_rank
             
@@ -471,6 +508,41 @@ def get_suit_rank(bboxes):
             suites_.append(suites[np.argmin(distances)])
             
         return rank, suites_
+
+def round_to_elems(img, bplot=False):
+    ''' From the image of a round finds the ranks and suites found on each player's cards
+    If bplot is True plot the bboxes of the objects found on the cards
+    Returns : ranks and suites as dictionaries, key corresponds to player, value is image
+    '''
+    image_cropped = crop(img)
+
+    #decompose channels
+    images = decompose_channels(image_cropped)
+
+    #normalize the 4 channels
+    binaries = [] 
+    for i in range(len(images)):
+        binaries.append(norm_binary(images[i]))
+
+    #boxes on blue channel
+    num, bboxes = find_bbox(binaries[3], plot=False)
+
+    #rearrange boxes
+    threshold = 100
+    num, bboxes = remove_dup_bboxes(num, bboxes, threshold)
+    boxes = rearrange_boxes(bboxes)
+
+    #extract cards
+    cards = extract_cards(image_cropped, boxes)
+
+    #rotate cards
+    cards_rotated = rotate_cards(cards)
+    bin_cards = binarize_cards(cards_rotated)
+
+    #ranks and suites extraction
+    ranks, suites = extraction(bin_cards, bplot)
+    
+    return ranks, suites
 
 
 #--------------- PLOT FUNCTIONS ------------------------------
